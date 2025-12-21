@@ -39,6 +39,20 @@ uvicorn mcp_quant.web.app:app --reload --port 8000
 
 Open `http://localhost:8000` to explore strategies and visualize price and equity curves. You can also fetch daily prices from Yahoo Finance by entering a ticker and date range.
 
+## Testing
+
+Run the test suite with the built-in unittest runner:
+
+```bash
+python -m unittest discover -s tests
+```
+
+Run a single test module:
+
+```bash
+python -m unittest tests/test_strategies.py
+```
+
 ## Notes
 
 - The backtest is intentionally simple: long/flat only, single asset, close-to-close returns.
