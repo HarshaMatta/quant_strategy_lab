@@ -41,7 +41,9 @@ Open `http://localhost:8000` to explore strategies and visualize price and equit
 
 The UI includes two tabs:
 - **Strategy Lab** for direct MCP-backed backtests.
-- **LLM Agent** for LLM-driven tool selection or direct MCP tool calls.
+- **LLM Agent** for LLM-driven tool selection and backtests.
+
+UI assets live in `src/mcp_quant/web/templates/index.html` and `src/mcp_quant/web/static/`.
 
 ### MCP client configuration
 
@@ -54,11 +56,12 @@ The web UI calls the MCP server through the MCP protocol:
 ### LLM agent configuration
 
 The **LLM Agent** tab uses an OpenAI-compatible chat API to decide which MCP tools to call.
-Set these environment variables before starting the web UI:
+You can configure LLM type, API base, model, and API key from the UI, or set defaults via environment variables:
 
 - `LLM_API_BASE` (default: `https://api.openai.com`)
 - `LLM_MODEL` (default: `gpt-4o-mini`)
 - `LLM_API_KEY` (or `OPENAI_API_KEY`)
+- `LLM_TIMEOUT` (default: `120`, seconds)
 
 If you want the UI to call MCP tools directly without the LLM, select **Direct MCP tool** in the agent tab.
 

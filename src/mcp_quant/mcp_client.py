@@ -101,6 +101,8 @@ class MCPClient:
             raise MCPClientError(str(message))
         return _content_to_value(getattr(result, "content", result))
 
+    async def call_mcp_tool(self, tool_name: str, arguments: Dict[str, Any] | None = None) -> Any:
+        return await self.call_tool(tool_name, arguments)
 
 def _content_to_value(content: Any) -> Any:
     if isinstance(content, list):
@@ -126,7 +128,3 @@ def _item_to_value(item: Any) -> Any:
 
 
 mcp_client = MCPClient()
-
-
-async def call_mcp_tool(tool_name: str, arguments: Dict[str, Any] | None = None) -> Any:
-    return await mcp_client.call_tool(tool_name, arguments)

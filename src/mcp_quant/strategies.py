@@ -246,10 +246,10 @@ def sample_prices(
     seed: int | None = 7,
 ) -> List[float]:
     rng = random.Random(seed)
-    prices = [start]
+    prices = [round(start, 2)]
     for _ in range(1, length):
         shock = rng.gauss(drift, vol)
-        prices.append(prices[-1] * (1.0 + shock))
+        prices.append(round(prices[-1] * (1.0 + shock), 2))
     return prices
 
 
@@ -263,7 +263,7 @@ def validate_prices(prices: Iterable[float]) -> List[float]:
         except (TypeError, ValueError):
             continue
         if num > 0:
-            cleaned.append(num)
+            cleaned.append(round(num, 2))
     if len(cleaned) < 5:
         raise ValueError("Need at least 5 positive price points")
     return cleaned
