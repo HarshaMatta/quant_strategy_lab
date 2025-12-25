@@ -1,5 +1,5 @@
 def main():
-    print("Hello from mcp-trading-strategies!")
+    print("Hello from quant_strategy_lab!")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-# MCP Quant Strategies
+# Quant Strategy Lab
 
 Lightweight MCP server and a web UI to explore simple quantitative trading strategies.
 
@@ -40,7 +40,7 @@ uvicorn mcp_quant.web.app:app --reload --port 8000
 Open `http://localhost:8000` to explore strategies and visualize price and equity curves. You can also fetch daily prices from Yahoo Finance by entering a ticker and date range.
 
 The UI includes two tabs:
-- **Strategy Lab** for direct MCP-backed backtests.
+- **Quant Strategy Lab** for direct MCP-backed backtests.
 - **LLM Agent** for LLM-driven tool selection and backtests.
 
 UI assets live in `src/mcp_quant/web/templates/index.html` and `src/mcp_quant/web/static/`.

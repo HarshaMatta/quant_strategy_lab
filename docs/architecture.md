@@ -1,6 +1,6 @@
-# Designing an MCP-Ready Strategy Lab
+# Designing the Quant Strategy Lab Architecture
 
-When you build a quantitative strategy lab that needs to serve both humans and agents, the architecture has to stay simple and predictable. This system does that by routing strategy execution through the MCP server, while keeping the overall layout clean: a single strategy engine, a thin interface layer, optional market data retrieval, and an LLM-driven tool selector for agent workflows. The web UI is a React app served as static assets by FastAPI.
+When you build the Quant Strategy Lab to serve both humans and agents, the architecture has to stay simple and predictable. This system does that by routing strategy execution through the MCP server, while keeping the overall layout clean: a single strategy engine, a thin interface layer, optional market data retrieval, and an LLM-driven tool selector for agent workflows. The web UI is a React app served as static assets by FastAPI.
 
 This article focuses on the MCP server architecture and how it fits into the broader system, without diving into implementation details.
 
@@ -66,7 +66,7 @@ The system supports two types of price data:
 1. Real market data fetched on demand.
 2. Synthetic data for fast demos and offline use.
 
-In this architecture, real market data can be fetched in two ways: the web API fetches Yahoo prices for the Strategy Lab, and the MCP server exposes a `fetch_yahoo_prices` tool for agent-driven workflows. The LLM agent uses the same MCP tool contract; it only adds a decision layer backed by the LLM provider. This matters for MCP architecture because it keeps tools usable even when data sources are unavailable. Clients can supply prices directly or call the synthetic series tool for a ready-made input, enabling deterministic testing and reproducible experiments.
+In this architecture, real market data can be fetched in two ways: the web API fetches Yahoo prices for the Quant Strategy Lab, and the MCP server exposes a `fetch_yahoo_prices` tool for agent-driven workflows. The LLM agent uses the same MCP tool contract; it only adds a decision layer backed by the LLM provider. This matters for MCP architecture because it keeps tools usable even when data sources are unavailable. Clients can supply prices directly or call the synthetic series tool for a ready-made input, enabling deterministic testing and reproducible experiments.
 
 ## Runtime Modes
 

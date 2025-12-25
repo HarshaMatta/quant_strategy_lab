@@ -1,5 +1,5 @@
 [project]
-name = "mcp-trading-strategies"
+name = "quant_strategy_lab"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
