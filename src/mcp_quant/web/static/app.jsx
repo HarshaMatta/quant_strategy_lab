@@ -471,14 +471,14 @@ function App() {
   return (
     <div className="wrap">
       <header>
-        <h1>Quant Strategy Lab using MCP server and LLM Agent</h1>
+        <h1>Quant Strategy Lab using MCP server in Manual and LLM modes</h1>
         <p>Pick a strategy, tune parameters, and visualize equity curves with a lightweight backtester with Yahoo Finance data.</p>
       </header>
 
       <div className="tabs" role="tablist" aria-label="App sections">
         {tabList.map((tab, index) => {
           const isActive = activeTab === tab;
-          const label = tab === "lab" ? "Strategy Lab" : "LLM Agent";
+          const label = tab === "lab" ? "Manual Mode" : "LLM Mode";
           return (
             <TabButton
               key={tab}

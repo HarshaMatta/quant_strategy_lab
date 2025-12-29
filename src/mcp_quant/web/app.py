@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from mcp_quant.data import fetch_yahoo_prices
 from mcp_quant.llm_agent import LLMConfigError, LLMResponseError, run_llm_agent
 from mcp_quant.mcp_client import MCPClientError, mcp_client
+from mcp_quant.normal_client import normal_client
 
 
 app = FastAPI(title="Quant Strategy Lab")
@@ -63,7 +64,7 @@ async def index() -> str:
 @app.get("/api/strategies")
 async def strategies() -> List[Dict[str, object]]:
     try:
-        result = await mcp_client.call_mcp_tool("list_strategies")
+        result = await normal_client.list_strategies()
     except MCPClientError as exc:
         raise HTTPException(status_code=502, detail=f"MCP error: {exc}") from exc
     if not isinstance(result, list):
@@ -82,19 +83,16 @@ async def run_backtest(payload: BacktestRequest) -> Dict[str, object]:
             raise HTTPException(status_code=502, detail="Failed to fetch Yahoo Finance data") from exc
     else:
         try:
-            prices = await mcp_client.call_mcp_tool("sample_price_series", {})
+            prices = await normal_client.sample_price_series()
         except MCPClientError as exc:
             raise HTTPException(status_code=502, detail=f"MCP error: {exc}") from exc
     try:
-        result = await mcp_client.call_mcp_tool(
-            "run_backtest",
-            {
-                "prices": prices,
-                "strategy": payload.strategy,
-                "params": payload.params,
-                "start_cash": payload.start_cash,
-                "fee_bps": payload.fee_bps,
-            },
+        result = await normal_client.run_backtest(
+            prices=prices,
+            strategy=payload.strategy,
+            params=payload.params,
+            start_cash=payload.start_cash,
+            fee_bps=payload.fee_bps,
         )
     except MCPClientError as exc:
         raise HTTPException(status_code=502, detail=f"MCP error: {exc}") from exc
@@ -103,13 +101,6 @@ async def run_backtest(payload: BacktestRequest) -> Dict[str, object]:
     return result
 
 
-@app.post("/api/mcp/call")
-async def call_mcp(payload: MCPToolRequest) -> Dict[str, object]:
-    try:
-        result = await mcp_client.call_mcp_tool(payload.tool_name, payload.arguments or {})
-    except MCPClientError as exc:
-        raise HTTPException(status_code=502, detail=f"MCP error: {exc}") from exc
-    return {"tool": payload.tool_name, "result": result}
 
 
 @app.post("/api/agent")
@@ -129,4 +120,3 @@ async def run_agent(payload: AgentRequest) -> Dict[str, object]:
     except LLMResponseError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return result
-

@@ -40,8 +40,8 @@ uvicorn mcp_quant.web.app:app --reload --port 8000
 Open `http://localhost:8000` to explore strategies and visualize price and equity curves. You can also fetch daily prices from Yahoo Finance by entering a ticker and date range.
 
 The UI includes two tabs:
-- **Quant Strategy Lab** for direct MCP-backed backtests.
-- **LLM Agent** for LLM-driven tool selection and backtests.
+- **Manual Mode** for direct MCP-backed backtests.
+- **LLM Mode** for LLM-driven tool selection and backtests.
 
 UI assets live in `src/mcp_quant/web/templates/index.html` and `src/mcp_quant/web/static/`.
 
@@ -55,7 +55,7 @@ The web UI calls the MCP server through the MCP protocol:
 
 ### LLM agent configuration
 
-The **LLM Agent** tab uses an OpenAI-compatible chat API to decide which MCP tools to call.
+The **LLM Mode** tab uses an OpenAI-compatible chat API to decide which MCP tools to call.
 You can configure LLM type, API base, model, and API key from the UI, or set defaults via environment variables:
 
 - `LLM_API_BASE` (default: `https://api.openai.com`)
@@ -63,7 +63,7 @@ You can configure LLM type, API base, model, and API key from the UI, or set def
 - `LLM_API_KEY` (or `OPENAI_API_KEY`)
 - `LLM_TIMEOUT` (default: `120`, seconds)
 
-If you want the UI to call MCP tools directly without the LLM, select **Direct MCP tool** in the agent tab.
+If you want the UI to call MCP tools directly without the LLM, use **Manual Mode**.
 
 ### Environment variables via `.env`
 
