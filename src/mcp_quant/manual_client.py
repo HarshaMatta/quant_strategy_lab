@@ -5,7 +5,7 @@ from typing import Any, Dict, List
 from mcp_quant.mcp_client import mcp_client
 
 
-class NormalModeClient:
+class ManualModeClient:
     async def list_strategies(self) -> Any:
         return await mcp_client.call_mcp_tool("list_strategies")
 
@@ -33,4 +33,4 @@ class NormalModeClient:
         )
 
 
-normal_client = NormalModeClient()
+manual_client = ManualModeClient()

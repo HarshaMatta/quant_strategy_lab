@@ -9,9 +9,9 @@ This article focuses on the MCP server architecture and how it fits into the bro
 ```mermaid
 flowchart TB
     ui["React UI (Manual + LLM Mode)"] --> api["Web API (FastAPI)"]
-    api --> normal["Normal Mode Client"]
+    api --> manual["Manual Mode Client"]
     api --> agent["LLM Agent"]
-    normal --> mcpclient["MCP Client Session"]
+    manual --> mcpclient["MCP Client Session"]
     agent --> mcpclient
     mcpclient --> mcp["MCP Server"]
     mcp --> engine["Strategy Engine"]
@@ -26,7 +26,7 @@ The architecture can be thought of in three layers:
 2. Interfaces: MCP tools for agents, plus a React-based web interface for humans that calls the web API in Manual Mode or LLM Mode.
 3. Data sources: optional market data feeds and synthetic series for demos or offline use.
 
-The MCP server sits in the interface layer. Its responsibility is not to “do the math” itself, but to expose the engine’s capabilities as tools with clear inputs and outputs. The web API keeps a persistent MCP client session and calls those tools through two paths: a Normal Mode client for Manual Mode, and an LLM agent for LLM Mode.
+The MCP server sits in the interface layer. Its responsibility is not to “do the math” itself, but to expose the engine’s capabilities as tools with clear inputs and outputs. The web API keeps a persistent MCP client session and calls those tools through two paths: a Manual Mode client for Manual Mode, and an LLM agent for LLM Mode.
 
 ## The MCP Server as a Stable Contract
 
@@ -54,7 +54,7 @@ By avoiding business logic in the server layer, the system keeps one source of t
 
 The MCP server is not the only interface. The architecture intentionally supports a web UI that uses the MCP tool contract in Manual Mode and LLM Mode, while external agents can still call MCP tools directly. This creates two UI entry points:
 
-- Human‑centric interaction through the web interface in Manual Mode (Normal Mode client calls MCP tools directly).
+- Human‑centric interaction through the web interface in Manual Mode (Manual Mode client calls MCP tools directly).
 - LLM‑centric interaction through the web interface in LLM Mode (LLM agent orchestrates MCP calls).
 
 Both paths lead to the same engine. Given the same prices and parameters, a backtest run via MCP matches one run in the browser. This is the architectural “anchor” that keeps the system coherent.
