@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 import json
 import os
 from datetime import date
 from typing import Any, Dict, List
-from urllib.error import HTTPError, URLError
-from urllib.request import Request, urlopen
+
+import httpx
 
 from mcp_quant.mcp_client import MCPClientError, mcp_client
 
@@ -35,6 +36,25 @@ SYSTEM_PROMPT = (
     "If you include range, omit start_date/end_date.\n"
     "If you need prices and they are not provided by the user, call sample_price_series first."
 )
+
+
+@dataclass
+class AgentState:
+    """Tracks the state of the LLM agent during execution."""
+    messages: List[Dict[str, str]] = field(default_factory=list)
+    steps: List[Dict[str, Any]] = field(default_factory=list)
+    last_prices: List[float] | None = None
+    tool_call_count: int = 0
+
+    def add_step(self, tool: str, arguments: Dict[str, Any], result: Any) -> None:
+        """Add a tool execution step to the history."""
+        self.steps.append({"tool": tool, "arguments": arguments, "result": result})
+        self.tool_call_count += 1
+
+    def update_prices(self, result: Any) -> None:
+        """Update last_prices if result contains a price series."""
+        if isinstance(result, list) and all(isinstance(item, (int, float)) for item in result):
+            self.last_prices = result
 
 
 _LLM_TYPE_DEFAULTS: Dict[str, Dict[str, str]] = {
@@ -73,14 +93,17 @@ def _extract_json(text: str) -> Dict[str, Any]:
     start = cleaned.find("{")
     end = cleaned.rfind("}")
     if start == -1 or end == -1:
-        raise LLMResponseError("LLM response did not include JSON")
+        snippet = text[:100] + "..." if len(text) > 100 else text
+        raise LLMResponseError(f"LLM response did not include JSON. Response: {snippet}")
     try:
         return json.loads(cleaned[start : end + 1])
     except json.JSONDecodeError as exc:
-        raise LLMResponseError(f"Invalid JSON from LLM: {exc}") from exc
+        json_text = cleaned[start : end + 1]
+        snippet = json_text[:200] + "..." if len(json_text) > 200 else json_text
+        raise LLMResponseError(f"Invalid JSON from LLM: {exc}. Text: {snippet}") from exc
 
 
-def _call_llm(
+async def _call_llm(
     messages: List[Dict[str, str]],
     temperature: float,
     llm_type: str | None = None,
@@ -103,15 +126,16 @@ def _call_llm(
     headers = {"Content-Type": "application/json"}
     if key:
         headers["Authorization"] = f"Bearer {key}"
-    request = Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers)
     try:
-        with urlopen(request, timeout=120) as response:
-            data = json.load(response)
-    except HTTPError as exc:
-        body = exc.read().decode("utf-8", "ignore") if exc.fp else ""
-        raise LLMResponseError(f"LLM HTTP error {exc.code}: {body}") from exc
-    except URLError as exc:
-        raise LLMResponseError(f"LLM connection error: {exc.reason}") from exc
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            response = await client.post(url, json=payload, headers=headers)
+            response.raise_for_status()
+            data = response.json()
+    except httpx.HTTPStatusError as exc:
+        body = exc.response.text
+        raise LLMResponseError(f"LLM HTTP error {exc.response.status_code}: {body}") from exc
+    except httpx.RequestError as exc:
+        raise LLMResponseError(f"LLM connection error: {exc}") from exc
     choices = data.get("choices") or []
     if not choices:
         raise LLMResponseError("LLM response missing choices")
@@ -133,17 +157,19 @@ async def run_llm_agent(
 ) -> Dict[str, Any]:
     max_steps = max(1, min(int(max_steps), 6))
     temperature = max(0.0, min(float(temperature), 1.5))
-    messages: List[Dict[str, str]] = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "system", "content": f"Today's date is {date.today().isoformat()}."},
-        {"role": "user", "content": prompt},
-    ]
-    steps: List[Dict[str, Any]] = []
-    last_prices: List[float] | None = None
+
+    # Initialize agent state
+    state = AgentState(
+        messages=[
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": f"Today's date is {date.today().isoformat()}."},
+            {"role": "user", "content": prompt},
+        ]
+    )
 
     for _ in range(max_steps):
-        content = _call_llm(
-            messages,
+        content = await _call_llm(
+            state.messages,
             temperature,
             llm_type=llm_type,
             llm_api_base=llm_api_base,
@@ -154,32 +180,34 @@ async def run_llm_agent(
         if "final" in parsed:
             return {
                 "final": parsed["final"],
-                "steps": steps,
+                "steps": state.steps,
             }
         tool_name = parsed.get("tool")
         if not tool_name:
-            raise LLMResponseError("LLM response missing tool or final")
+            parsed_str = json.dumps(parsed)[:200]
+            raise LLMResponseError(f"LLM response missing 'tool' or 'final' field. Response: {parsed_str}")
         arguments = parsed.get("arguments") or {}
-        if tool_name == "run_backtest" and "prices" not in arguments and last_prices is not None:
-            arguments["prices"] = last_prices
+        if tool_name == "run_backtest" and "prices" not in arguments and state.last_prices is not None:
+            arguments["prices"] = state.last_prices
         log_args = arguments
         if isinstance(arguments, dict) and isinstance(arguments.get("prices"), list):
             log_args = {**arguments, "prices": f"<{len(arguments['prices'])} prices>"}
         try:
             result = await mcp_client.call_mcp_tool(tool_name, arguments)
-            # print(f"Tool result for {tool_name}: {json.dumps(result)}")
         except MCPClientError as exc:
             raise LLMResponseError(f"MCP tool error: {exc}") from exc
-        steps.append({"tool": tool_name, "arguments": arguments, "result": result})
-        if isinstance(result, list) and all(isinstance(item, (int, float)) for item in result):
-            last_prices = result
+
+        # Update state
+        state.add_step(tool_name, arguments, result)
+        state.update_prices(result)
+
         if tool_name == "run_backtest":
             return {
                 "final": "Tool executed.",
-                "steps": steps,
+                "steps": state.steps,
             }
-        messages.append({"role": "assistant", "content": content})
-        messages.append(
+        state.messages.append({"role": "assistant", "content": content})
+        state.messages.append(
             {
                 "role": "user",
                 "content": (
@@ -192,5 +220,5 @@ async def run_llm_agent(
 
     return {
         "final": "Max tool steps reached without a final response.",
-        "steps": steps,
+        "steps": state.steps,
     }

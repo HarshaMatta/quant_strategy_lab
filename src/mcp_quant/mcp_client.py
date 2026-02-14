@@ -5,6 +5,7 @@ import json
 import os
 import shlex
 import sys
+import time
 from typing import Any, Dict
 
 from mcp import ClientSession, StdioServerParameters
@@ -18,6 +19,12 @@ except ImportError:  # pragma: no cover - optional transport
 
 class MCPClientError(RuntimeError):
     pass
+
+
+# Connection health constants
+MAX_RETRIES = 3
+BASE_RETRY_DELAY = 0.5  # seconds
+MAX_RETRY_DELAY = 5.0  # seconds
 
 
 def _get_stdio_params() -> StdioServerParameters:
@@ -37,6 +44,9 @@ class MCPClient:
         self._transport: tuple[Any, Any] | None = None
         self._lock = asyncio.Lock()
         self._connect_lock = asyncio.Lock()
+        self._last_connect_attempt: float = 0.0
+        self._retry_delay: float = BASE_RETRY_DELAY
+        self._is_healthy: bool = False
 
     async def connect(self) -> None:
         if self._session is not None:
@@ -44,6 +54,7 @@ class MCPClient:
         async with self._connect_lock:
             if self._session is not None:
                 return
+            self._last_connect_attempt = time.time()
             url = os.getenv("MCP_SERVER_URL")
             if url:
                 if sse_client is None:
@@ -60,11 +71,15 @@ class MCPClient:
                 if enter is not None:
                     await enter()
                 await self._session.initialize()
+                self._is_healthy = True
+                self._retry_delay = BASE_RETRY_DELAY  # Reset retry delay on success
             except Exception as exc:
+                self._is_healthy = False
                 await self.close()
                 raise MCPClientError(str(exc)) from exc
 
     async def close(self) -> None:
+        self._is_healthy = False
         if self._session is not None:
             exit_method = getattr(self._session, "__aexit__", None)
             if exit_method is not None:
@@ -84,22 +99,58 @@ class MCPClient:
             self._transport_cm = None
             self._transport = None
 
-    async def call_tool(self, tool_name: str, arguments: Dict[str, Any] | None = None) -> Any:
+    async def _reconnect_with_backoff(self) -> None:
+        """Attempt to reconnect with exponential backoff."""
+        await self.close()
+        await asyncio.sleep(self._retry_delay)
+        self._retry_delay = min(self._retry_delay * 2, MAX_RETRY_DELAY)
         await self.connect()
-        async with self._lock:
-            if self._session is None:
-                raise MCPClientError("MCP session is not available")
+
+    async def health_check(self) -> bool:
+        """Check if the connection is healthy."""
+        if self._session is None:
+            return False
+        if not self._is_healthy:
+            return False
+        return True
+
+    async def call_tool(self, tool_name: str, arguments: Dict[str, Any] | None = None) -> Any:
+        last_error: Exception | None = None
+        for attempt in range(MAX_RETRIES):
             try:
-                result = await asyncio.wait_for(
-                    self._session.call_tool(tool_name, arguments or {}),
-                    timeout=15,
-                )
-            except Exception as exc:
-                raise MCPClientError(str(exc)) from exc
-        if getattr(result, "is_error", False):
-            message = _content_to_value(getattr(result, "content", "")) or "MCP tool error"
-            raise MCPClientError(str(message))
-        return _content_to_value(getattr(result, "content", result))
+                await self.connect()
+                async with self._lock:
+                    if self._session is None:
+                        raise MCPClientError("MCP session is not available")
+                    try:
+                        result = await asyncio.wait_for(
+                            self._session.call_tool(tool_name, arguments or {}),
+                            timeout=15,
+                        )
+                    except asyncio.TimeoutError as exc:
+                        self._is_healthy = False
+                        raise MCPClientError(f"MCP tool '{tool_name}' timed out after 15 seconds") from exc
+                    except Exception as exc:
+                        self._is_healthy = False
+                        raise MCPClientError(f"MCP tool '{tool_name}' failed: {exc}") from exc
+                if getattr(result, "is_error", False):
+                    message = _content_to_value(getattr(result, "content", "")) or "MCP tool error"
+                    raise MCPClientError(f"MCP tool '{tool_name}' returned error: {message}")
+                return _content_to_value(getattr(result, "content", result))
+            except MCPClientError as exc:
+                last_error = exc
+                if attempt < MAX_RETRIES - 1 and not self._is_healthy:
+                    # Attempt reconnection with backoff
+                    try:
+                        await self._reconnect_with_backoff()
+                    except Exception:
+                        pass  # Continue to next retry
+                else:
+                    break
+        # All retries exhausted
+        if last_error:
+            raise last_error
+        raise MCPClientError(f"Failed to call MCP tool '{tool_name}' after {MAX_RETRIES} attempts")
 
     async def call_mcp_tool(self, tool_name: str, arguments: Dict[str, Any] | None = None) -> Any:
         return await self.call_tool(tool_name, arguments)
