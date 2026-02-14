@@ -90,9 +90,9 @@ Root (`/`) serves the React shell, and `/static/*` serves static assets.
 ## Cross-Cutting Concerns
 
 - Input validation:
-  - Pydantic request models in `web/app.py`.
-  - Strategy/price validation in `strategies.py`.
-  - Additional reusable validators in `validation.py`.
+  - Primary request validation is enforced by Pydantic models in `web/app.py`.
+  - Strategy/price validation is enforced in `strategies.py`.
+  - `validation.py` contains reusable helpers and strategy-specific checks that can be reused across call paths.
 - Rate limiting:
   - In-memory per-IP limits (30 requests/minute, 300 requests/hour).
   - Applied to API routes; static assets and `/` are excluded.
@@ -100,6 +100,7 @@ Root (`/`) serves the React shell, and `/static/*` serves static assets.
   - MCP failures map to HTTP 502.
   - Data source connectivity failures map to HTTP 503.
   - Invalid user input maps to HTTP 400/422.
+
 
 ## Intentional Design Choices
 

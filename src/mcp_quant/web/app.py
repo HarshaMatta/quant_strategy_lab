@@ -18,6 +18,7 @@ from mcp_quant.data import fetch_yahoo_prices
 from mcp_quant.llm_agent import LLMConfigError, LLMResponseError, run_llm_agent
 from mcp_quant.mcp_client import MCPClientError, mcp_client
 from mcp_quant.manual_client import manual_client
+from mcp_quant.strategies import list_strategies as list_strategy_specs
 
 logger = logging.getLogger(__name__)
 
@@ -166,10 +167,11 @@ class BacktestRequest(BaseModel):
     @classmethod
     def validate_strategy(cls, v: str) -> str:
         """Validate strategy name against known strategies."""
-        allowed = {"sma_crossover", "rsi_reversion", "channel_breakout"}
-        if v not in allowed:
+        cleaned = v.strip()
+        allowed = {spec.name for spec in list_strategy_specs()}
+        if cleaned not in allowed:
             raise ValueError(f"Unknown strategy '{v}'. Allowed: {', '.join(sorted(allowed))}")
-        return v
+        return cleaned
 
     @field_validator("ticker")
     @classmethod
