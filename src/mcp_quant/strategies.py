@@ -3,7 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 import random
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List
+
+import pandas as pd
 
 
 @dataclass(frozen=True)
@@ -36,17 +38,10 @@ def list_strategies() -> List[StrategySpec]:
 def _sma(prices: List[float], window: int) -> List[float | None]:
     if window <= 0:
         raise ValueError("window must be positive")
-    sma: List[float | None] = [None] * len(prices)
     if not prices:
-        return sma
-    running = 0.0
-    for i, price in enumerate(prices):
-        running += price
-        if i >= window:
-            running -= prices[i - window]
-        if i + 1 >= window:
-            sma[i] = running / window
-    return sma
+        return []
+    sma = pd.Series(prices, dtype="float64").rolling(window=window, min_periods=window).mean()
+    return [None if pd.isna(value) else float(value) for value in sma.tolist()]
 
 
 def _rsi(prices: List[float], window: int) -> List[float | None]:

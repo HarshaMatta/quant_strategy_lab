@@ -26,6 +26,14 @@ class StrategyTests(unittest.TestCase):
         self.assertEqual(len(signals), len(prices))
         self.assertTrue(all(value in (0, 1) for value in signals))
 
+    def test_sma_rolling_values(self) -> None:
+        prices = [1, 2, 3, 4, 5]
+        self.assertEqual(strategies._sma(prices, 3), [None, None, 2.0, 3.0, 4.0])
+
+    def test_sma_rejects_non_positive_window(self) -> None:
+        with self.assertRaises(ValueError):
+            strategies._sma([100, 101, 102], 0)
+
     def test_backtest_outputs(self) -> None:
         prices = [100, 102, 101, 103, 104, 106]
         signals = [0, 1, 1, 0, 1, 0]

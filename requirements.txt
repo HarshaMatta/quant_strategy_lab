@@ -2,3 +2,4 @@ fastapi
 uvicorn[standard]
 mcp
 pydantic
+pandas>=2.0.0

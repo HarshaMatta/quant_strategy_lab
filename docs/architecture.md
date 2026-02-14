@@ -1,96 +1,112 @@
-# Designing the Quant Strategy Lab Architecture
+# Quant Strategy Lab Architecture
 
-When you build the Quant Strategy Lab to serve both humans and agents, the architecture has to stay simple and predictable. This system does that by routing strategy execution through the MCP server, while keeping the overall layout clean: a single strategy engine, a thin interface layer, optional market data retrieval, and an LLM-driven tool selector for LLM Mode workflows. The web UI is a React app served as static assets by FastAPI.
+This document reflects the current architecture implemented in:
 
-This article focuses on the MCP server architecture and how it fits into the broader system, without diving into implementation details.
+- `src/mcp_quant/strategies.py`
+- `src/mcp_quant/mcp_server.py`
+- `src/mcp_quant/mcp_client.py`
+- `src/mcp_quant/manual_client.py`
+- `src/mcp_quant/llm_agent.py`
+- `src/mcp_quant/data.py`
+- `src/mcp_quant/web/app.py`
 
-## Architecture Diagram
+## System Diagram
 
 ```mermaid
 flowchart TB
-    ui["React UI (Manual + LLM Mode)"] --> api["Web API (FastAPI)"]
-    api <--> data[("yahoo prices")]
-    api --> manual["Manual Mode Client"]
-    api --> agent["LLM Agent"]
-    manual --> mcpclient["MCP Client Session"]
+    ui["React UI (Manual + LLM tabs)"] --> api["FastAPI Web API"]
+    api --> rl["Rate limit middleware"]
+    api --> manual["ManualModeClient"]
+    api --> agent["LLM agent loop"]
+    api --> yweb[("Yahoo helper in web layer")]
+
+    manual --> mcpclient["Persistent MCP client"]
+    agent --> llm[("OpenAI-compatible /v1/chat/completions")]
     agent --> mcpclient
-    mcpclient --> mcp["MCP Server"]
-    mcp --> engine["Strategy Engine"]
+
+    mcpclient --> mcp["MCP server tools"]
+    mcp --> engine["Strategy engine"]
+    mcp --> ytool[("Yahoo helper in MCP tool")]
 ```
 
-## A Three‑Layer Mental Model
+## Layer Model
 
-The architecture can be thought of in three layers:
+1. Core engine: strategy definitions, signal generation, backtesting, and metrics in `strategies.py`.
+2. Interface layer: MCP tools in `mcp_server.py`, plus HTTP endpoints in `web/app.py`.
+3. Data layer: synthetic prices from `sample_price_series` and real prices from Yahoo Finance.
+4. Orchestration layer: optional LLM tool selection in `llm_agent.py`.
 
-1. Core logic: the strategy engine that produces signals, runs backtests, and computes metrics.
-2. Interfaces: MCP tools for agents, plus a React-based web interface for humans that calls the web API in Manual Mode or LLM Mode.
-3. Data sources: optional market data feeds and synthetic series for demos or offline use.
+## MCP Tool Contract
 
-The MCP server sits in the interface layer. Its responsibility is not to “do the math” itself, but to expose the engine’s capabilities as tools with clear inputs and outputs. The web API keeps a persistent MCP client session and calls those tools through two paths: a Manual Mode client for Manual Mode, and an LLM agent for LLM Mode.
+The MCP server exposes five tools:
 
-## The MCP Server as a Stable Contract
+- `list_strategies`
+- `get_strategy_schema`
+- `sample_price_series`
+- `fetch_yahoo_prices`
+- `run_backtest`
 
-The MCP server is designed around a small set of well‑defined tools:
+The server is intentionally thin:
 
-- List available strategies and their parameters.
-- Fetch a strategy schema for UI or client setup.
-- Generate a synthetic price series for quick experiments.
-- Optionally fetch Yahoo Finance prices for LLM Mode workflows.
-- Run a backtest and return structured results.
+- Delegates strategy and backtest math to `strategies.py`.
+- Normalizes date/range inputs for Yahoo fetch.
+- Returns structured payloads for stable client integration.
 
-These tools establish a stable contract for any client. Whether the caller is a chat agent, a notebook, or another service, the interface remains the same. This reduces coupling and keeps the engine free to evolve internally without breaking clients.
+## Runtime Request Paths
 
-## Why the MCP Server Is Thin by Design
+### Manual Mode path (`/api/backtest`)
 
-A strong design choice here is to keep the MCP server “thin.” It delegates all domain logic to the strategy engine, and focuses on:
+1. If `ticker`, `start_date`, and `end_date` are present, FastAPI fetches Yahoo prices directly via `data.fetch_yahoo_prices`.
+2. Otherwise, FastAPI requests synthetic prices via MCP tool `sample_price_series`.
+3. FastAPI runs the backtest via MCP tool `run_backtest`.
+4. Response returns prices, signals, equity curve, positions, trades, and metrics.
 
-- Input validation: preventing malformed or unsafe requests.
-- Normalization: ensuring consistent inputs across clients.
-- Output shaping: returning structured, predictable payloads.
+### LLM Mode path (`/api/agent`)
 
-By avoiding business logic in the server layer, the system keeps one source of truth for strategy behavior and analytics. That makes debugging easier and upgrades less risky.
+1. FastAPI calls `run_llm_agent`.
+2. The agent calls an OpenAI-compatible chat completion endpoint.
+3. The model selects MCP tools (for example `fetch_yahoo_prices`, `list_strategies`, `run_backtest`).
+4. The agent executes MCP calls through the same persistent MCP client and returns the tool trace.
 
-## How It Fits Into the Overall System
+## Client Transport and Lifecycle
 
-The MCP server is not the only interface. The architecture intentionally supports a web UI that uses the MCP tool contract in Manual Mode and LLM Mode, while external agents can still call MCP tools directly. This creates two UI entry points:
+- Startup: `web/app.py` opens one MCP client connection on app startup.
+- Shutdown: the connection is closed on app shutdown.
+- Default transport: stdio, spawning `python -m mcp_quant.mcp_server`.
+- Optional transport: SSE when `MCP_SERVER_URL` is set and SSE support is installed.
+- Resilience: `mcp_client.py` includes timeout, health tracking, retry, and exponential backoff behavior.
 
-- Human‑centric interaction through the web interface in Manual Mode (Manual Mode client calls MCP tools directly).
-- LLM‑centric interaction through the web interface in LLM Mode (LLM agent orchestrates MCP calls).
+## Web API Surface
 
-Both paths lead to the same engine. Given the same prices and parameters, a backtest run via MCP matches one run in the browser. This is the architectural “anchor” that keeps the system coherent.
+The FastAPI app exposes:
 
-## Data Strategy: Real vs Synthetic
+- `GET /api/strategies`
+- `POST /api/backtest`
+- `POST /api/agent`
+- `GET /api/rate-limit-status`
 
-The system supports two types of price data:
+Root (`/`) serves the React shell, and `/static/*` serves static assets.
 
-1. Real market data fetched on demand.
-2. Synthetic data for fast demos and offline use.
+## Cross-Cutting Concerns
 
-In this architecture, real market data can be fetched in two ways: the web API fetches Yahoo prices for Manual Mode, and the MCP server exposes a `fetch_yahoo_prices` tool for LLM Mode workflows. The LLM agent uses the same MCP tool contract; it only adds a decision layer backed by the LLM provider. This matters for MCP architecture because it keeps tools usable even when data sources are unavailable. Clients can supply prices directly or call the synthetic series tool for a ready-made input, enabling deterministic testing and reproducible experiments.
+- Input validation:
+  - Pydantic request models in `web/app.py`.
+  - Strategy/price validation in `strategies.py`.
+  - Additional reusable validators in `validation.py`.
+- Rate limiting:
+  - In-memory per-IP limits (30 requests/minute, 300 requests/hour).
+  - Applied to API routes; static assets and `/` are excluded.
+- Error mapping:
+  - MCP failures map to HTTP 502.
+  - Data source connectivity failures map to HTTP 503.
+  - Invalid user input maps to HTTP 400/422.
 
-## Runtime Modes
+## Intentional Design Choices
 
-The MCP client can connect in two modes:
+- Thin MCP server: keeps tool contract stable while strategy internals evolve.
+- Shared core engine: both Manual and LLM flows converge on the same backtest logic.
+- Dual Yahoo access path is intentional:
+  - Direct web-layer fetch supports straightforward human-driven runs.
+  - MCP tool fetch supports LLM-driven multi-step workflows.
 
-- Stdio (default): the web API spawns the MCP server and keeps a persistent session.
-- SSE (optional): the web API connects to an externally hosted MCP server when `MCP_SERVER_URL` is set.
-
-## Scaling the MCP Layer
-
-Because the MCP server is small and stateless, it scales naturally:
-
-- Add new strategies without changing the contract shape.
-- Add new analytics without expanding the interface footprint.
-- Support multiple clients with minimal coordination.
-
-If you want to expand the system, the server remains stable while the strategy engine grows. That’s a deliberate separation of concerns, and it keeps the MCP surface area compact.
-
-## The Core Architectural Advantage
-
-This setup provides a clear advantage: clients interact with a consistent tool set, while the internal engine can evolve independently. The MCP server is a contract, not a computation engine. That small distinction makes the system easier to test, easier to document, and easier to extend.
-
-In short: the MCP server gives the architecture a stable spine. Everything else — UI, data sources, strategy internals — can change without breaking that spine.
-
-## Final Takeaway
-
-An MCP‑first strategy lab succeeds when the server stays small, predictable, and contract‑driven. By separating interfaces from strategy logic and keeping data optional, this architecture balances flexibility with stability. It is lean enough to understand at a glance, yet strong enough to power multiple clients with identical behavior.
+This keeps the architecture predictable while supporting both deterministic manual runs and agentic tool orchestration.
