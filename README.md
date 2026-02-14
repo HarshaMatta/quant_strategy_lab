@@ -2,6 +2,11 @@
 
 Lightweight MCP server and a web UI to explore simple quantitative trading strategies.
 
+## Prerequisites
+
+- Python 3.14+
+- `uv` (recommended) or `pip`
+
 ## Setup
 
 ### Using uv
@@ -29,6 +34,7 @@ The server exposes tools:
 - `list_strategies`
 - `get_strategy_schema`
 - `sample_price_series`
+- `fetch_yahoo_prices`
 - `run_backtest`
 
 ## Run the web UI
@@ -40,7 +46,7 @@ uvicorn mcp_quant.web.app:app --reload --port 8000
 Open `http://localhost:8000` to explore strategies and visualize price and equity curves. You can also fetch daily prices from Yahoo Finance by entering a ticker and date range.
 
 The UI includes two tabs:
-- **Manual Mode** for direct MCP-backed backtests.
+- **Manual Mode** for explicit strategy runs. Backtest execution goes through MCP tools; if you provide ticker + date range, the web API fetches Yahoo prices directly and then runs the MCP backtest.
 - **LLM Mode** for LLM-driven tool selection and backtests.
 
 UI assets live in `src/mcp_quant/web/templates/index.html` and `src/mcp_quant/web/static/`.
@@ -61,7 +67,6 @@ You can configure LLM type, API base, model, and API key from the UI, or set def
 - `LLM_API_BASE` (default: `https://api.openai.com`)
 - `LLM_MODEL` (default: `gpt-4o-mini`)
 - `LLM_API_KEY` (or `OPENAI_API_KEY`)
-- `LLM_TIMEOUT` (default: `120`, seconds)
 
 If you want the UI to call MCP tools directly without the LLM, use **Manual Mode**.
 
@@ -92,16 +97,33 @@ uvicorn mcp_quant.web.app:app --reload --port 8000 --env-file .env
 
 ## Testing
 
-Run the test suite with the built-in unittest runner:
+Install test dependencies:
 
 ```bash
-python3 -m unittest discover -s tests
+uv pip install -e ".[test]"
+```
+
+Run the full test suite with pytest:
+
+```bash
+python3 -m pytest -q
+
+uv run pytest -q
+```
+
+Show extra summary for skipped/xfailed/errors
+```bash
+python3 -m pytest -vv -s -ra
+
+uv run pytest -vv -s -ra
 ```
 
 Run a single test module:
 
 ```bash
-python3 -m unittest tests/test_strategies.py
+python3 -m pytest tests/test_strategies.py -q
+
+uv run pytest tests/test_strategies.py -vv
 ```
 
 ## Notes
