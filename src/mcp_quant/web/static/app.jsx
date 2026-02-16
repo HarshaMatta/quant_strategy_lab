@@ -211,6 +211,8 @@ function App() {
   const [labPrices, setLabPrices] = useState([]);
   const [labEquity, setLabEquity] = useState([]);
   const [labPositions, setLabPositions] = useState([]);
+  const [labStartCash, setLabStartCash] = useState(10000);
+  const [labCanRun, setLabCanRun] = useState(true);
 
   const [agentPrompt, setAgentPrompt] = useState("");
   const [agentSteps, setAgentSteps] = useState(3);
@@ -225,8 +227,7 @@ function App() {
   const [agentEquity, setAgentEquity] = useState([]);
   const [agentPositions, setAgentPositions] = useState([]);
   const [agentStartCash, setAgentStartCash] = useState(10000);
-
-  const initialRunRef = useRef(false);
+  const [agentCanRun, setAgentCanRun] = useState(true);
 
   const selectedStrategy = useMemo(
     () => strategies.find((strategy) => strategy.name === selectedName) || null,
@@ -239,14 +240,22 @@ function App() {
   }, [llmType]);
 
   const labMetricItems = useMemo(
-    () => computeMetrics(labMetrics, labPrices, labEquity, startCash),
-    [labMetrics, labPrices, labEquity, startCash]
+    () => computeMetrics(labMetrics, labPrices, labEquity, labStartCash),
+    [labMetrics, labPrices, labEquity, labStartCash]
   );
 
   const agentMetricItems = useMemo(
     () => computeMetrics(agentMetrics, agentPrices, agentEquity, agentStartCash),
     [agentMetrics, agentPrices, agentEquity, agentStartCash]
   );
+
+  function enableLabRun() {
+    setLabCanRun(true);
+  }
+
+  function enableAgentRun() {
+    setAgentCanRun(true);
+  }
 
   useEffect(() => {
     const config = TYPE_OPTIONS[llmType] || TYPE_OPTIONS.openai;
@@ -274,6 +283,7 @@ function App() {
   useEffect(() => {
     if (selectedStrategy) {
       setParams(selectedStrategy.params || {});
+      setLabCanRun(true);
     }
   }, [selectedStrategy?.name]);
 
@@ -329,20 +339,12 @@ function App() {
     setLabPrices(result.prices || []);
     setLabEquity(result.equity_curve || []);
     setLabPositions(result.positions || []);
+    setLabStartCash(Number(startCash || 10000));
+    setLabCanRun(false);
   }
-
-  useEffect(() => {
-    if (!selectedName || initialRunRef.current) return;
-    initialRunRef.current = true;
-    runBacktest();
-  }, [selectedName]);
 
   async function runAgent() {
     setAgentMessage("Running...");
-    setAgentMetrics({});
-    setAgentPrices([]);
-    setAgentEquity([]);
-    setAgentPositions([]);
     if (!agentPrompt.trim()) {
       alert("Please enter a prompt.");
       setAgentMessage("Waiting for input...");
@@ -387,9 +389,11 @@ function App() {
       setAgentPositions(positions);
       setAgentStartCash(backtest.startCash);
       setAgentMessage(result.final || "Backtest result loaded.");
+      setAgentCanRun(false);
       return;
     }
     setAgentMessage(result.final || "No backtest result returned.");
+    setAgentCanRun(true);
   }
 
   const tabList = ["lab", "agent"];
@@ -432,6 +436,16 @@ function App() {
     [labPositions]
   );
 
+  const labPriceEquityDatasets = useMemo(
+    () => [labPriceDataset, labEquityDataset],
+    [labPriceDataset, labEquityDataset]
+  );
+
+  const labPositionDatasets = useMemo(
+    () => [labPositionDataset],
+    [labPositionDataset]
+  );
+
   const agentPriceDataset = useMemo(
     () => ({
       label: "Price",
@@ -466,6 +480,16 @@ function App() {
       tension: 0,
     }),
     [agentPositions]
+  );
+
+  const agentPriceEquityDatasets = useMemo(
+    () => [agentPriceDataset, agentEquityDataset],
+    [agentPriceDataset, agentEquityDataset]
+  );
+
+  const agentPositionDatasets = useMemo(
+    () => [agentPositionDataset],
+    [agentPositionDataset]
   );
 
   return (
@@ -514,7 +538,10 @@ function App() {
             <select
               id="strategy"
               value={selectedName}
-              onChange={(event) => setSelectedName(event.target.value)}
+              onChange={(event) => {
+                setSelectedName(event.target.value);
+                enableLabRun();
+              }}
             >
               {strategies.map((strategy) => (
                 <option key={strategy.name} value={strategy.name}>
@@ -538,6 +565,7 @@ function App() {
                     onChange={(event) => {
                       const nextValue = Number(event.target.value);
                       setParams((prev) => ({ ...prev, [key]: nextValue }));
+                      enableLabRun();
                     }}
                   />
                 </div>
@@ -551,7 +579,10 @@ function App() {
                   id="startCash"
                   type="number"
                   value={startCash}
-                  onChange={(event) => setStartCash(Number(event.target.value))}
+                  onChange={(event) => {
+                    setStartCash(Number(event.target.value));
+                    enableLabRun();
+                  }}
                 />
               </div>
               <div>
@@ -561,7 +592,10 @@ function App() {
                   type="number"
                   step="0.1"
                   value={feeBps}
-                  onChange={(event) => setFeeBps(Number(event.target.value))}
+                  onChange={(event) => {
+                    setFeeBps(Number(event.target.value));
+                    enableLabRun();
+                  }}
                 />
               </div>
             </div>
@@ -572,7 +606,10 @@ function App() {
               list="tickerList"
               placeholder="AAPL"
               value={ticker}
-              onChange={(event) => setTicker(event.target.value)}
+              onChange={(event) => {
+                setTicker(event.target.value);
+                enableLabRun();
+              }}
             />
             <datalist id="tickerList">
               <option value="AAPL"></option>
@@ -590,7 +627,10 @@ function App() {
                   id="startDate"
                   type="date"
                   value={startDate}
-                  onChange={(event) => setStartDate(event.target.value)}
+                  onChange={(event) => {
+                    setStartDate(event.target.value);
+                    enableLabRun();
+                  }}
                 />
               </div>
               <div>
@@ -599,12 +639,15 @@ function App() {
                   id="endDate"
                   type="date"
                   value={endDate}
-                  onChange={(event) => setEndDate(event.target.value)}
+                  onChange={(event) => {
+                    setEndDate(event.target.value);
+                    enableLabRun();
+                  }}
                 />
               </div>
             </div>
             <br/>
-            <button id="runBtn" type="button" onClick={runBacktest}>Run backtest</button>
+            <button id="runBtn" type="button" onClick={runBacktest} disabled={!labCanRun}>Run backtest</button>
           </section>
 
           <section className="card">
@@ -614,7 +657,7 @@ function App() {
               <h3>Price vs Equity</h3>
               <LineChart
                 labels={labLabels}
-                datasets={[labPriceDataset, labEquityDataset]}
+                datasets={labPriceEquityDatasets}
                 options={PRICE_EQUITY_OPTIONS}
                 height={220}
               />
@@ -624,7 +667,7 @@ function App() {
               <h3>Position</h3>
               <LineChart
                 labels={labLabels}
-                datasets={[labPositionDataset]}
+                datasets={labPositionDatasets}
                 options={POSITION_OPTIONS}
                 height={160}
               />
@@ -647,7 +690,10 @@ function App() {
               <select
                 id="llmType"
                 value={llmType}
-                onChange={(event) => setLlmType(event.target.value)}
+                onChange={(event) => {
+                  setLlmType(event.target.value);
+                  enableAgentRun();
+                }}
               >
                 {TYPE_ORDER.map((key) => (
                   <option key={key} value={key}>{TYPE_OPTIONS[key].label}</option>
@@ -662,7 +708,10 @@ function App() {
                 placeholder="https://api.openai.com"
                 readOnly={llmType !== "custom"}
                 value={llmApiBase}
-                onChange={(event) => setLlmApiBase(event.target.value)}
+                onChange={(event) => {
+                  setLlmApiBase(event.target.value);
+                  enableAgentRun();
+                }}
               />
 
               <label htmlFor="llmModel">Model</label>
@@ -671,7 +720,10 @@ function App() {
                 list="llmModelList"
                 placeholder="gpt-4o-mini"
                 value={llmModel}
-                onChange={(event) => setLlmModel(event.target.value)}
+                onChange={(event) => {
+                  setLlmModel(event.target.value);
+                  enableAgentRun();
+                }}
               />
               <datalist id="llmModelList">
                 {modelOptions.map((model) => (
@@ -685,7 +737,10 @@ function App() {
                 type="password"
                 placeholder="sk-..."
                 value={llmApiKey}
-                onChange={(event) => setLlmApiKey(event.target.value)}
+                onChange={(event) => {
+                  setLlmApiKey(event.target.value);
+                  enableAgentRun();
+                }}
               />
 
               <label htmlFor="agentPrompt">Prompt</label>
@@ -693,7 +748,10 @@ function App() {
                 id="agentPrompt"
                 placeholder="Run a backtest using sma_crossover with default params."
                 value={agentPrompt}
-                onChange={(event) => setAgentPrompt(event.target.value)}
+                onChange={(event) => {
+                  setAgentPrompt(event.target.value);
+                  enableAgentRun();
+                }}
               ></textarea>
               <div className="row">
                 <div>
@@ -704,7 +762,10 @@ function App() {
                     min="1"
                     max="6"
                     value={agentSteps}
-                    onChange={(event) => setAgentSteps(Number(event.target.value))}
+                    onChange={(event) => {
+                      setAgentSteps(Number(event.target.value));
+                      enableAgentRun();
+                    }}
                   />
                 </div>
                 <div>
@@ -716,7 +777,10 @@ function App() {
                     min="0"
                     max="1.5"
                     value={agentTemp}
-                    onChange={(event) => setAgentTemp(Number(event.target.value))}
+                    onChange={(event) => {
+                      setAgentTemp(Number(event.target.value));
+                      enableAgentRun();
+                    }}
                   />
                 </div>
               </div>
@@ -724,7 +788,7 @@ function App() {
               <br/>
             </div>
 
-            <button id="agentRunBtn" type="button" onClick={runAgent}>Run</button>
+            <button id="agentRunBtn" type="button" onClick={runAgent} disabled={!agentCanRun}>Run backtest</button>
           </section>
 
           <section className="card">
@@ -738,7 +802,7 @@ function App() {
               <h3>Price vs Equity</h3>
               <LineChart
                 labels={agentLabels}
-                datasets={[agentPriceDataset, agentEquityDataset]}
+                datasets={agentPriceEquityDatasets}
                 options={PRICE_EQUITY_OPTIONS}
                 height={220}
               />
@@ -748,7 +812,7 @@ function App() {
               <h3>Position</h3>
               <LineChart
                 labels={agentLabels}
-                datasets={[agentPositionDataset]}
+                datasets={agentPositionDatasets}
                 options={POSITION_OPTIONS}
                 height={160}
               />

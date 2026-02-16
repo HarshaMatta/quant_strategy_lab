@@ -1,44 +1,87 @@
 # Quant Strategy Lab Architecture
 
-This document reflects the current architecture implemented in:
+This document describes the current runtime architecture implemented in:
 
-- `src/mcp_quant/strategies.py`
-- `src/mcp_quant/mcp_server.py`
-- `src/mcp_quant/mcp_client.py`
+- `src/mcp_quant/web/app.py`
+- `src/mcp_quant/web/static/app.jsx`
 - `src/mcp_quant/manual_client.py`
+- `src/mcp_quant/mcp_client.py`
+- `src/mcp_quant/mcp_server.py`
 - `src/mcp_quant/llm_agent.py`
 - `src/mcp_quant/data.py`
-- `src/mcp_quant/web/app.py`
+- `src/mcp_quant/strategies.py`
 
-## System Diagram
+## Design Summary
+
+- One execution contract: strategy execution runs through MCP `run_backtest`.
+- Two interaction modes: Manual mode (`/api/backtest`) and LLM mode (`/api/agent`).
+- One shared MCP session: both modes use the same in-process `mcp_client`.
+- One strategy engine: signal generation and performance logic live in `strategies.py`.
+
+## Runtime Diagram
 
 ```mermaid
 flowchart TB
-    ui["React UI (Manual + LLM tabs)"] --> api["FastAPI Web API"]
-    api --> rl["Rate limit middleware"]
-    api --> manual["ManualModeClient"]
-    api --> agent["LLM agent loop"]
-    api --> yweb[("Yahoo helper in web layer")]
+    ui["React UI (Manual + LLM)"] --> api["FastAPI API (web/app.py)"]
 
-    manual --> mcpclient["Persistent MCP client"]
-    agent --> llm[("OpenAI-compatible /v1/chat/completions")]
-    agent --> mcpclient
+    api --> strategies["GET /api/strategies"]
+    api --> backtest["POST /api/backtest"]
+    api --> agent["POST /api/agent"]
 
-    mcpclient --> mcp["MCP server tools"]
-    mcp --> engine["Strategy engine"]
-    mcp --> ytool[("Yahoo helper in MCP tool")]
+    strategies --> listStrategies["MCP list_strategies"]
+
+    backtest --> dataSource{Data source}
+    dataSource --> yahoo["Direct Yahoo fetch (data.py)"]
+    dataSource --> sample["MCP sample_price_series"]
+    yahoo --> runBacktest["MCP run_backtest"]
+    sample --> runBacktest
+
+    agent --> llmLoop["run_llm_agent loop"]
+    llmLoop <--> llm["LLM /v1/chat/completions"]
+    llmLoop --> sharedClient["Shared mcp_client session"]
+
+    runBacktest --> sharedClient
+    listStrategies --> sharedClient
+
+    sharedClient --> mcp["MCP tools (mcp_server.py)"]
+    mcp --> engine["Backtest engine (strategies.py)"]
 ```
 
-## Layer Model
+## Component Responsibilities
 
-1. Core engine: strategy definitions, signal generation, backtesting, and metrics in `strategies.py`.
-2. Interface layer: MCP tools in `mcp_server.py`, plus HTTP endpoints in `web/app.py`.
-3. Data layer: synthetic prices from `sample_price_series` and real prices from Yahoo Finance.
-4. Orchestration layer: optional LLM tool selection in `llm_agent.py`.
+- `web/app.py`: HTTP surface, request validation, rate limiting, MCP lifecycle, and error mapping.
+- `web/static/app.jsx`: Manual and LLM tabs, request payloads, and chart/metrics rendering.
+- `manual_client.py`: thin async wrappers for manual mode MCP calls.
+- `mcp_client.py`: transport/session management, retries, backoff, and tool-call execution.
+- `mcp_server.py`: tool contract for strategy discovery, price sourcing, and backtest execution.
+- `llm_agent.py`: tool-calling loop, strategy name normalization, and terminal response behavior.
+- `strategies.py`: strategy catalog, signal generation, backtest loop, and metrics.
+
+## Request Flows
+
+### Manual mode (`POST /api/backtest`)
+
+1. `BacktestRequest` validates strategy, params, ticker/date format, and numeric ranges.
+2. API selects data source:
+   - direct Yahoo fetch via `fetch_yahoo_prices(...)`, or
+   - synthetic series via MCP `sample_price_series`.
+3. API executes MCP `run_backtest` through `manual_client.run_backtest`.
+4. Response returns `prices`, `signals`, `equity_curve`, `positions`, `trades`, and `metrics`.
+
+### LLM mode (`POST /api/agent`)
+
+1. API calls `run_llm_agent(...)`.
+2. Agent sends messages to an OpenAI-compatible `/v1/chat/completions` endpoint.
+3. Agent parses JSON output into either:
+   - `{"tool": ..., "arguments": ...}`, or
+   - `{"final": ...}`.
+4. Tool calls execute via `mcp_client.call_mcp_tool(...)`.
+5. Non-terminal tool results are fed back into the loop.
+6. If `run_backtest` is executed, the agent returns immediately with tool steps and final status.
 
 ## MCP Tool Contract
 
-The MCP server exposes five tools:
+Current tools in `mcp_server.py`:
 
 - `list_strategies`
 - `get_strategy_schema`
@@ -46,68 +89,33 @@ The MCP server exposes five tools:
 - `fetch_yahoo_prices`
 - `run_backtest`
 
-The server is intentionally thin:
+`run_backtest` delegates execution to:
 
-- Delegates strategy and backtest math to `strategies.py`.
-- Normalizes date/range inputs for Yahoo fetch.
-- Returns structured payloads for stable client integration.
+- `validate_prices`
+- `generate_signals`
+- `backtest`
 
-## Runtime Request Paths
+This keeps MCP focused on orchestration and contract boundaries while strategy internals stay in `strategies.py`.
 
-### Manual Mode path (`/api/backtest`)
+## UI Behavior
 
-1. If `ticker`, `start_date`, and `end_date` are present, FastAPI fetches Yahoo prices directly via `data.fetch_yahoo_prices`.
-2. Otherwise, FastAPI requests synthetic prices via MCP tool `sample_price_series`.
-3. FastAPI runs the backtest via MCP tool `run_backtest`.
-4. Response returns prices, signals, equity curve, positions, trades, and metrics.
+- Charts update only after clicking `Run backtest`.
+- After a successful run, the corresponding run button is disabled.
+- Editing inputs re-enables the run button.
+- Input changes do not auto-run or auto-refresh charts.
 
-### LLM Mode path (`/api/agent`)
+## Operational Notes
 
-1. FastAPI calls `run_llm_agent`.
-2. The agent calls an OpenAI-compatible chat completion endpoint.
-3. The model selects MCP tools (for example `fetch_yahoo_prices`, `list_strategies`, `run_backtest`).
-4. The agent executes MCP calls through the same persistent MCP client and returns the tool trace.
+- MCP connection opens at FastAPI startup and closes at shutdown.
+- Default MCP transport is stdio (`python -m mcp_quant.mcp_server`).
+- If `MCP_SERVER_URL` is set and SSE support is available, transport can switch to SSE.
+- API rate limiting is enabled: `30/minute` and `300/hour` per IP.
 
-## Client Transport and Lifecycle
+Error mapping in the API layer:
 
-- Startup: `web/app.py` opens one MCP client connection on app startup.
-- Shutdown: the connection is closed on app shutdown.
-- Default transport: stdio, spawning `python -m mcp_quant.mcp_server`.
-- Optional transport: SSE when `MCP_SERVER_URL` is set and SSE support is installed.
-- Resilience: `mcp_client.py` includes timeout, health tracking, retry, and exponential backoff behavior.
-
-## Web API Surface
-
-The FastAPI app exposes:
-
-- `GET /api/strategies`
-- `POST /api/backtest`
-- `POST /api/agent`
-- `GET /api/rate-limit-status`
-
-Root (`/`) serves the React shell, and `/static/*` serves static assets.
-
-## Cross-Cutting Concerns
-
-- Input validation:
-  - Primary request validation is enforced by Pydantic models in `web/app.py`.
-  - Strategy/price validation is enforced in `strategies.py`.
-  - `validation.py` contains reusable helpers and strategy-specific checks that can be reused across call paths.
-- Rate limiting:
-  - In-memory per-IP limits (30 requests/minute, 300 requests/hour).
-  - Applied to API routes; static assets and `/` are excluded.
-- Error mapping:
-  - MCP failures map to HTTP 502.
-  - Data source connectivity failures map to HTTP 503.
-  - Invalid user input maps to HTTP 400/422.
-
-
-## Intentional Design Choices
-
-- Thin MCP server: keeps tool contract stable while strategy internals evolve.
-- Shared core engine: both Manual and LLM flows converge on the same backtest logic.
-- Dual Yahoo access path is intentional:
-  - Direct web-layer fetch supports straightforward human-driven runs.
-  - MCP tool fetch supports LLM-driven multi-step workflows.
-
-This keeps the architecture predictable while supporting both deterministic manual runs and agentic tool orchestration.
+- MCP failures: `502`
+- LLM response failures: `502`
+- LLM config failures: `503`
+- Yahoo connection/timeouts: `503`
+- Yahoo value errors: `400`
+- Request schema/validation errors: `422`

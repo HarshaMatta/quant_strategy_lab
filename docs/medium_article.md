@@ -1,119 +1,87 @@
-# Building an MCP-First Quant Strategy Lab for Analysts and AI Agents
+# Building an MCP-Centered Quant Strategy Lab with Manual and LLM Modes
 
-Many MCP-based applications are built mainly for agentic workflows. I wanted a single system that supports analysts through a UI and LLM agents through tool calls, without duplicating execution logic.
+We built this quant strategy lab to experiment with MCP server integration across Manual and LLM workflows, so we can compare LLM output with manual workflow output.
 
-The design rule is simple: all strategy execution goes through the MCP server contract.
+MCP is treated as the execution boundary for strategy operations, so both human-driven and LLM-driven workflows can reach the same backtest path. The web app, the manual client wrapper, and the LLM loop are all interface layers around a shared MCP contract rather than separate execution engines.
 
-## Why This Matters
+## Why MCP Is the Center of the Design
 
-The MCP server is the center of the architecture:
+At code level, the architecture has a clear chain. The core strategy engine lives in `src/mcp_quant/strategies.py`. The MCP tool surface lives in `src/mcp_quant/mcp_server.py`. Transport, session health, and retries live in `src/mcp_quant/mcp_client.py`. Finally, the interface entry point lives in `src/mcp_quant/web/app.py`, with UI interactions in `src/mcp_quant/web/static/app.jsx`.
 
-- It exposes a stable tool interface.
-- It keeps strategy math in one place (the engine).
-- It keeps manual and agentic workflows behaviorally consistent.
+Because backtest operations flow through MCP, strategy logic is not duplicated across modes. Built-in strategies such as `sma_crossover`, `rsi_reversion`, and `channel_breakout` remain defined once in the engine and consumed through one tool contract.
 
-This reduces drift between interfaces and makes changes safer.
+## Runtime Architecture
 
-## System Components
-
-1. MCP server: `src/mcp_quant/mcp_server.py`
-2. Strategy engine: `src/mcp_quant/strategies.py`
-3. FastAPI app: `src/mcp_quant/web/app.py`
-4. LLM loop: `src/mcp_quant/llm_agent.py`
-
-Built-in strategies:
-
-- `sma_crossover`
-- `rsi_reversion`
-- `channel_breakout`
-
-## Architecture Diagram
-
-Note: Medium does not render Mermaid natively. Export this as PNG/SVG before publishing.
+Note: Medium does not render Mermaid directly. Export diagrams as PNG/SVG before publishing.
 
 ```mermaid
 flowchart TB
-    ui["React UI (Manual + LLM tabs)"] --> api["FastAPI Web API"]
-    api --> manual["ManualModeClient"]
-    api --> agent["LLM agent loop"]
-    api --> yweb[("Yahoo fetch (manual path)")]
+    ui["React UI<br/>Manual + LLM"] --> api["FastAPI API"]
 
-    manual --> mcpclient["Persistent MCP client"]
-    agent --> mcpclient
-    agent --> llm[("OpenAI-compatible /v1/chat/completions")]
+    api --> backtest["POST /api/backtest"]
+    api --> agent["POST /api/agent"]
 
-    mcpclient --> mcp["MCP server tools"]
-    mcp --> engine["Strategy engine"]
-    mcp --> ytool[("Yahoo fetch tool")]
+    backtest --> runManual["MCP run_backtest"]
+
+    agent --> loop["run_llm_agent loop"]
+    loop <--> llm["LLM<br/>/v1/chat/completions"]
+    loop --> mcpClient["Shared mcp_client"]
+    runManual --> mcpClient
+
+    mcpClient --> mcp["MCP server tools"]
+    mcp --> engine["Backtest engine<br/>strategies.py"]
 ```
 
-## MCP Tool Surface
+## MCP Client Lifecycle in the API Process
 
-- `list_strategies`
-- `get_strategy_schema`
-- `sample_price_series`
-- `fetch_yahoo_prices`
-- `run_backtest`
-
-MCP `run_backtest` stays thin and delegates to core engine functions:
+The FastAPI process opens one MCP connection at startup and closes it at shutdown. In practice, this is important because both Manual and LLM modes use the same persistent session, which avoids reconnect overhead and keeps retry/health behavior centralized in one place.
 
 ```python
-@mcp.tool()
-def run_backtest(prices, strategy, params=None, start_cash=10_000.0, fee_bps=1.0):
-    cleaned = validate_prices(prices)
-    signals = generate_signals(cleaned, strategy, params)
-    result = backtest(cleaned, signals, start_cash=start_cash, fee_bps=fee_bps)
-    return {"prices": cleaned, "signals": signals, **result}
+@app.on_event("startup")
+async def startup_mcp() -> None:
+    await mcp_client.connect()
+
+@app.on_event("shutdown")
+async def shutdown_mcp() -> None:
+    await mcp_client.close()
 ```
 
-## Two Entry Points, One Contract
+By default, this session talks to the MCP server over stdio (`python -m mcp_quant.mcp_server`). If `MCP_SERVER_URL` is set and SSE support is available, the same client can switch to SSE transport.
 
-### Manual Mode (`POST /api/backtest`)
+## Manual Mode Flow Through MCP
 
-1. If ticker + date range are provided, Yahoo prices are fetched in the web layer.
-2. Otherwise, synthetic prices come from MCP `sample_price_series`.
-3. Backtest execution runs through MCP `run_backtest`.
+Manual mode (`POST /api/backtest`) chooses a data source branch before execution. Depending on input, prices are fetched directly with `fetch_yahoo_prices` or requested via MCP `sample_price_series`.
 
-### LLM Mode (`POST /api/agent`)
+After data is available, the execution path converges to MCP `run_backtest` through `manual_client.run_backtest`. This is the core consistency point: regardless of source data, strategy execution and metrics are produced by the same MCP-backed engine call.
 
-1. The model emits tool actions as JSON.
-2. Backend executes MCP tools through the same persistent client session.
-3. Tool outputs are fed back until the model returns a final response.
 
-Typical tool action:
+## LLM Mode as an MCP Orchestration Loop
 
-```json
-{"tool": "fetch_yahoo_prices", "arguments": {"ticker": "AAPL", "range": "1y"}}
-```
+LLM mode (`POST /api/agent`) calls `run_llm_agent`, which repeatedly requests JSON actions from an OpenAI-compatible `/v1/chat/completions` endpoint. Each tool action is executed through `mcp_client.call_mcp_tool`, and non-terminal tool results are fed back into the loop as conversational context.
 
-Both modes converge on the same MCP contract and return consistent behavior.
+The loop behavior is implementation-specific and deterministic in two important ways. First, strategy names in `run_backtest.strategy` and `get_strategy_schema.name` are resolved before tool execution using normalization, aliases, compact matching, and fuzzy matching. Second, when the selected tool is `run_backtest`, the function returns immediately with `{"final": "Tool executed.", "steps": ...}`. If the model provides `{"final": ...}` first, that final is returned. If neither terminal condition is reached, the loop ends at step limit.
 
-## Adding a New Strategy
+## MCP Tool Contract and Thin Server Pattern
 
-1. Add a `StrategySpec` entry in `list_strategies()` in `src/mcp_quant/strategies.py`.
-2. Implement `_signals_<name>()` and wire it in `generate_signals()`.
-3. Add strategy-specific validation in `src/mcp_quant/validation.py`.
-4. Update Manual Mode allowlist in `BacktestRequest.validate_strategy` in `src/mcp_quant/web/app.py`.
-5. Add tests in `tests/test_strategies.py` and `tests/test_mcp_server.py`.
-
-You usually do not need a new endpoint; existing MCP `run_backtest` handles execution.
-
-Minimal wiring pattern:
+The MCP tool surface currently exposes `list_strategies`, `get_strategy_schema`, `sample_price_series`, `fetch_yahoo_prices`, and `run_backtest`. The important design choice is that `run_backtest` in `mcp_server.py` remains thin and delegates core logic to engine functions in `strategies.py`.
 
 ```python
-def generate_signals(prices, strategy, params=None):
-    params = params or {}
-    if strategy == "my_new_strategy":
-        return _signals_my_new_strategy(prices, params)
-    # existing branches...
+cleaned = validate_prices(prices)
+signals = generate_signals(cleaned, strategy, params)
+result = backtest(cleaned, signals, start_cash=start_cash, fee_bps=fee_bps)
+return {"prices": cleaned, "signals": signals, **result}
 ```
 
-## Takeaway
+This keeps the tool contract stable while letting the strategy engine evolve independently.
 
-An MCP-first design gave this project three practical wins:
+## How the UI Reflects Executed MCP State
 
-- one engine
-- one contract
-- multiple interfaces
+The UI intentionally ties visualization updates to explicit execution events instead of input changes. In both tabs, charts update only when the user clicks `Run backtest`. After a successful run, the corresponding run button is disabled and grayed out. Any parameter or input change re-enables that button, signaling that current chart state is stale relative to current inputs. This creates a clean boundary between editing state and executed state.
 
-That is why the system stays clear, extensible, and predictable as it grows.
+## Extending the Project Without Breaking the Contract
+
+Adding a strategy is straightforward: define a new `StrategySpec`, wire new signal logic into `generate_signals()`, add any needed validation, and extend tests. In most cases you do not need new endpoints, because the existing MCP `run_backtest` contract already handles execution.
+
+## Closing Thoughts
+
+The most useful outcome of this architecture is not merely MCP adoption; it is operational clarity. One execution core, one MCP contract, and one shared transport/session allow two interaction styles, manual and agentic, without architectural drift.
