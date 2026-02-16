@@ -81,6 +81,50 @@ const POSITION_OPTIONS = {
   },
 };
 
+function toIsoDateString(value) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function parseIsoDate(value) {
+  if (!value || typeof value !== "string") return null;
+  const parts = value.split("-");
+  if (parts.length !== 3) return null;
+  const year = Number(parts[0]);
+  const month = Number(parts[1]);
+  const day = Number(parts[2]);
+  if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) return null;
+  const parsed = new Date(year, month - 1, day);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed;
+}
+
+function buildDateLabels(length, startDateValue, endDateValue) {
+  if (!Number.isFinite(length) || length <= 0) return [];
+  const labels = [];
+  const today = new Date();
+  const end = parseIsoDate(endDateValue) || today;
+  const start = parseIsoDate(startDateValue);
+
+  if (start && end > start && length > 1) {
+    const totalMs = end.getTime() - start.getTime();
+    const stepMs = totalMs / (length - 1);
+    for (let i = 0; i < length; i += 1) {
+      labels.push(toIsoDateString(new Date(start.getTime() + stepMs * i)));
+    }
+    return labels;
+  }
+
+  const oneDayMs = 24 * 60 * 60 * 1000;
+  const first = new Date(end.getTime() - oneDayMs * (length - 1));
+  for (let i = 0; i < length; i += 1) {
+    labels.push(toIsoDateString(new Date(first.getTime() + oneDayMs * i)));
+  }
+  return labels;
+}
+
 function formatPercent(value) {
   const safeValue = Number(value);
   if (!Number.isFinite(safeValue)) return "0.00%";
@@ -211,6 +255,7 @@ function App() {
   const [labPrices, setLabPrices] = useState([]);
   const [labEquity, setLabEquity] = useState([]);
   const [labPositions, setLabPositions] = useState([]);
+  const [labDateLabels, setLabDateLabels] = useState([]);
   const [labStartCash, setLabStartCash] = useState(10000);
   const [labCanRun, setLabCanRun] = useState(true);
 
@@ -226,6 +271,7 @@ function App() {
   const [agentPrices, setAgentPrices] = useState([]);
   const [agentEquity, setAgentEquity] = useState([]);
   const [agentPositions, setAgentPositions] = useState([]);
+  const [agentDateLabels, setAgentDateLabels] = useState([]);
   const [agentStartCash, setAgentStartCash] = useState(10000);
   const [agentCanRun, setAgentCanRun] = useState(true);
 
@@ -335,10 +381,12 @@ function App() {
       return;
     }
     const result = await response.json();
+    const prices = result.prices || [];
     setLabMetrics(result.metrics || {});
-    setLabPrices(result.prices || []);
+    setLabPrices(prices);
     setLabEquity(result.equity_curve || []);
     setLabPositions(result.positions || []);
+    setLabDateLabels(buildDateLabels(prices.length, payload.start_date, payload.end_date));
     setLabStartCash(Number(startCash || 10000));
     setLabCanRun(false);
   }
@@ -387,6 +435,7 @@ function App() {
       setAgentPrices(prices);
       setAgentEquity(equity);
       setAgentPositions(positions);
+      setAgentDateLabels(buildDateLabels(prices.length));
       setAgentStartCash(backtest.startCash);
       setAgentMessage(result.final || "Backtest result loaded.");
       setAgentCanRun(false);
@@ -397,8 +446,14 @@ function App() {
   }
 
   const tabList = ["lab", "agent"];
-  const labLabels = useMemo(() => labPrices.map((_, i) => i + 1), [labPrices]);
-  const agentLabels = useMemo(() => agentPrices.map((_, i) => i + 1), [agentPrices]);
+  const labLabels = useMemo(
+    () => (labDateLabels.length === labPrices.length ? labDateLabels : buildDateLabels(labPrices.length, startDate, endDate)),
+    [labDateLabels, labPrices.length, startDate, endDate]
+  );
+  const agentLabels = useMemo(
+    () => (agentDateLabels.length === agentPrices.length ? agentDateLabels : buildDateLabels(agentPrices.length)),
+    [agentDateLabels, agentPrices.length]
+  );
 
   const labPriceDataset = useMemo(
     () => ({
