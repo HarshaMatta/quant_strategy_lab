@@ -175,6 +175,19 @@ button:hover {
   box-shadow: 0 10px 20px rgba(200, 92, 50, 0.25);
 }
 
+button:disabled {
+  background: #b6afa3;
+  color: #f5f2ee;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+}
+
+button:disabled:hover {
+  transform: none;
+  box-shadow: none;
+}
+
 .metrics {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));

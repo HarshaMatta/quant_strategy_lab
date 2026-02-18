@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import difflib
 import json
 import os
+import re
 from datetime import date
 from typing import Any, Dict, List
 
 import httpx
 
 from mcp_quant.mcp_client import MCPClientError, mcp_client
+from mcp_quant.strategies import list_strategies as list_strategy_specs
 
 
 class LLMConfigError(RuntimeError):
@@ -31,11 +34,92 @@ SYSTEM_PROMPT = (
     "Respond with JSON only. Choose exactly one of:\n"
     "1) {\"tool\": \"<tool_name>\", \"arguments\": { ... }}\n"
     "2) {\"final\": \"<concise answer>\"}\n\n"
+    "If strategy text contains typos (e.g., smacrossover), resolve it to a canonical strategy name "
+    "before calling get_strategy_schema or run_backtest.\n"
     "If the user mentions a ticker or real market data, call fetch_yahoo_prices first. "
     "Use YYYY-MM-DD for dates or a short range like 1y, 6mo, 30d. "
     "If you include range, omit start_date/end_date.\n"
     "If you need prices and they are not provided by the user, call sample_price_series first."
 )
+
+
+_STRATEGY_ALIASES: Dict[str, str] = {
+    "sma": "sma_crossover",
+    "smacrossover": "sma_crossover",
+    "movingaverage": "sma_crossover",
+    "moving_average": "sma_crossover",
+    "rsi": "rsi_reversion",
+    "channel": "channel_breakout",
+    "breakout": "channel_breakout",
+}
+
+
+def _normalize_strategy_name(value: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9]+", "_", str(value).strip().lower())
+    return cleaned.strip("_")
+
+
+def _compact_strategy_name(value: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value).lower())
+
+
+def _resolve_strategy_name(value: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("Strategy name must be a non-empty string")
+
+    strategy_names = [spec.name for spec in list_strategy_specs()]
+    normalized_to_canonical = {_normalize_strategy_name(name): name for name in strategy_names}
+    compact_to_canonical = {_compact_strategy_name(name): name for name in strategy_names}
+
+    normalized = _normalize_strategy_name(value)
+    if normalized in normalized_to_canonical:
+        return normalized_to_canonical[normalized]
+
+    alias = _STRATEGY_ALIASES.get(normalized)
+    if alias in strategy_names:
+        return alias
+
+    compact = _compact_strategy_name(value)
+    if compact in compact_to_canonical:
+        return compact_to_canonical[compact]
+
+    compact_aliases = {_compact_strategy_name(k): v for k, v in _STRATEGY_ALIASES.items()}
+    compact_alias = compact_aliases.get(compact)
+    if compact_alias in strategy_names:
+        return compact_alias
+
+    closest = difflib.get_close_matches(normalized, list(normalized_to_canonical.keys()), n=1, cutoff=0.72)
+    if closest:
+        return normalized_to_canonical[closest[0]]
+
+    closest_compact = difflib.get_close_matches(compact, list(compact_to_canonical.keys()), n=1, cutoff=0.72)
+    if closest_compact:
+        return compact_to_canonical[closest_compact[0]]
+
+    available = ", ".join(sorted(strategy_names))
+    raise ValueError(f"Unknown strategy: {value}. Available strategies: {available}")
+
+
+def _resolve_strategy_args(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    if not isinstance(arguments, dict):
+        return {}
+    resolved = dict(arguments)
+
+    if tool_name == "run_backtest":
+        raw_name = resolved.get("strategy")
+        if isinstance(raw_name, str) and raw_name.strip():
+            try:
+                resolved["strategy"] = _resolve_strategy_name(raw_name)
+            except ValueError as exc:
+                raise LLMResponseError(str(exc)) from exc
+    elif tool_name == "get_strategy_schema":
+        raw_name = resolved.get("name")
+        if isinstance(raw_name, str) and raw_name.strip():
+            try:
+                resolved["name"] = _resolve_strategy_name(raw_name)
+            except ValueError as exc:
+                raise LLMResponseError(str(exc)) from exc
+    return resolved
 
 
 @dataclass
@@ -186,7 +270,7 @@ async def run_llm_agent(
         if not tool_name:
             parsed_str = json.dumps(parsed)[:200]
             raise LLMResponseError(f"LLM response missing 'tool' or 'final' field. Response: {parsed_str}")
-        arguments = parsed.get("arguments") or {}
+        arguments = _resolve_strategy_args(tool_name, parsed.get("arguments") or {})
         if tool_name == "run_backtest" and "prices" not in arguments and state.last_prices is not None:
             arguments["prices"] = state.last_prices
         log_args = arguments
